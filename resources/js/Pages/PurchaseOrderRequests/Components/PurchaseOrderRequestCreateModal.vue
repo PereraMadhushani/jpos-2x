@@ -101,56 +101,36 @@
                   class="border-b border-gray-200 hover:bg-gray-50 transition-colors duration-200"
                 >
                   <td class="px-4 py-4">
-                    <div
-                      v-if="product.product_id"
-                      class="text-sm text-gray-900 font-medium"
+                    <select
+                      class="w-full px-3 py-2 text-sm text-gray-800 bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      :class="
+                        form.errors[`products.${index}.product_id`]
+                          ? 'border-red-500'
+                          : 'border-gray-300'
+                      "
+                      v-model="form.products[index].product_id"
+                      @change="onProductChange(index)"
                     >
-                      {{
-                        product.product_obj
-                          ? product.product_obj.name
-                          : getProductName(product.product_id)
-                      }}
-                    </div>
-                    <div v-else>
-                      <select
-                        class="w-full px-3 py-2 text-sm text-gray-800 bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        :class="
-                          form.errors[`products.${index}.product_id`]
-                            ? 'border-red-500'
-                            : 'border-gray-300'
-                        "
-                        v-model="form.products[index].product_id"
-                        @change="onProductChange(index)"
+                      <option value="">Select Product</option>
+                      <option
+                        v-for="option in allProducts"
+                        :key="option.id"
+                        :value="option.id"
                       >
-                        <option value="">Select Product</option>
-                        <option
-                          v-for="option in allProducts"
-                          :key="option.id"
-                          :value="option.id"
-                        >
-                          {{ option.name }}
-                        </option>
-                      </select>
-                      <div
-                        v-if="form.errors[`products.${index}.product_id`]"
-                        class="mt-1 text-xs text-red-500"
-                      >
-                        {{ form.errors[`products.${index}.product_id`] }}
-                      </div>
+                        {{ option.name }}
+                      </option>
+                    </select>
+                    <div
+                      v-if="form.errors[`products.${index}.product_id`]"
+                      class="mt-1 text-xs text-red-500"
+                    >
+                      {{ form.errors[`products.${index}.product_id`] }}
                     </div>
                   </td>
                   <td class="px-4 py-4">
-                    <span class="text-sm text-gray-700">{{
-                      product.product_obj
-                        ? product.product_obj.measurement_unit &&
-                          product.product_obj.measurement_unit.name
-                          ? product.product_obj.measurement_unit.name
-                          : product.product_obj.purchaseUnit &&
-                            product.product_obj.purchaseUnit.name
-                          ? product.product_obj.purchaseUnit.name
-                          : "N/A"
-                        : getUnitName(product.product_id)
-                    }}</span>
+                    <span class="text-sm text-gray-700">
+                      {{ product.product_obj && product.product_obj.measurement_unit ? product.product_obj.measurement_unit.name : product.product_obj && product.product_obj.purchaseUnit ? product.product_obj.purchaseUnit.name : "N/A" }}
+                    </span>
                   </td>
                   <td class="px-4 py-4 text-center">
                     <input
@@ -254,30 +234,21 @@ const form = useForm({
   order_date: new Date().toISOString().split("T")[0],
   supplier_id: "",
   user_id: "",
-  products: [], // Will be populated with all products
+  products: [
+    {
+      product_id: "",
+      requested_quantity: 1,
+      measurement_unit_id: "",
+      product_obj: null,
+    },
+  ], // Start with empty product row
 });
 
-// Initialize form with all products
+// Don't auto-populate products, let user select them
 watch(
   () => props.products,
   (newProducts) => {
-    if (newProducts && newProducts.length > 0) {
-      form.products = newProducts.map((p) => ({
-        product_id: p.id,
-        requested_quantity: 1,
-        measurement_unit_id: p.measurement_unit_id || p.purchase_unit_id || "",
-        product_obj: p,
-      }));
-    } else {
-      form.products = [
-        {
-          product_id: "",
-          requested_quantity: 1,
-          measurement_unit_id: "",
-          product_obj: null,
-        },
-      ];
-    }
+    // Do nothing - let user start fresh
   },
   { immediate: true }
 );
@@ -289,28 +260,18 @@ watch(
     if (newVal) {
       form.order_number = props.orderNumber;
       form.order_date = new Date().toISOString().split("T")[0];
-
       form.user_id = page.props.auth?.user?.id || "";
       form.clearErrors();
 
-      // Initialize products array
-      if (props.products && props.products.length > 0) {
-        form.products = props.products.map((p) => ({
-          product_id: p.id,
+      // Start with one empty product row for user to fill
+      form.products = [
+        {
+          product_id: "",
           requested_quantity: 1,
-          measurement_unit_id: p.measurement_unit_id || p.purchase_unit_id || "",
-          product_obj: p,
-        }));
-      } else {
-        form.products = [
-          {
-            product_id: "",
-            requested_quantity: 1,
-            measurement_unit_id: "",
-            product_obj: null,
-          },
-        ];
-      }
+          measurement_unit_id: "",
+          product_obj: null,
+        },
+      ];
     }
   }
 );
