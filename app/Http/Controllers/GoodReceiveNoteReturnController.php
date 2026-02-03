@@ -9,6 +9,7 @@ use App\Models\GoodsReceivedNote;
 use App\Models\GoodsReceivedNoteProduct;
 use App\Models\Product;
 use App\Models\ProductMovement;
+use App\Models\ProductAvailableQuantity;
 use App\Models\MeasurementUnit;
 use App\Models\CompanyInformation;
 use App\Models\User;
@@ -143,6 +144,81 @@ class GoodReceiveNoteReturnController extends Controller
         'measurementUnits' => $measurementUnits,
         'user' => $user,
         ]);
+    }
+
+    /**
+     * Load GRN details with available quantities from product_available_quantities table
+     * 
+     * API endpoint that returns:
+     * - GRN header information
+     * - Products received with unit relationships
+     * - Available quantities from product_available_quantities table (via SUM aggregation)
+     * 
+     * @param int $id - The GRN ID
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function goodsReceivedNoteReturnDetails($id)
+    {
+        try {
+            // Load the Goods Received Note with relationships
+            $goodsReceivedNote = GoodsReceivedNote::with(['supplier', 'user'])
+                ->findOrFail($id);
+
+            // Get products from goods_received_note_products table with all unit relationships
+            $goodsReceivedNoteProducts = GoodsReceivedNoteProduct::where('goods_received_note_id', $id)
+                ->with([
+                    'product',
+                    'product.purchaseUnit',
+                    'product.transferUnit',
+                    'product.salesUnit'
+                ])
+                ->get()
+                ->map(function($grnProduct) {
+                    $product = $grnProduct->product;
+                    
+                    // Get available quantities from product_available_quantities table
+                    // Filter by the specific GRN to get only quantities from this GRN
+                    $availableQty = ProductAvailableQuantity::where('product_id', $product->id)
+                        ->where('goods_received_note_id', $grnProduct->goods_received_note_id)
+                        ->select(
+                            DB::raw('COALESCE(SUM(available_quantity), 0) as total_purchase_units'),
+                            DB::raw('COALESCE(SUM(quantity_in_transfer_unit), 0) as total_transfer_units'),
+                            DB::raw('COALESCE(SUM(quantity_in_sales_unit), 0) as total_sales_units')
+                        )
+                        ->first();
+                    
+                    return [
+                        'product_id' => $grnProduct->product_id,
+                        'name' => $product->name ?? 'N/A',
+                        'batch_number' => $grnProduct->batch_number ?? 'N/A',
+                        'quantity' => $grnProduct->quantity ?? 0,
+                        'requested_quantity' => $grnProduct->requested_quantity ?? 0,
+                        'purchase_price' => (float)($grnProduct->purchase_price ?? 0),
+                        'discount' => (float)($grnProduct->discount ?? 0),
+                        'total' => (float)($grnProduct->total ?? 0),
+                        'purchase_unit' => $product->purchaseUnit,
+                        'transfer_unit' => $product->transferUnit,
+                        'sales_unit' => $product->salesUnit,
+                        'purchase_to_transfer_rate' => $product->purchase_to_transfer_rate ?? 1,
+                        'transfer_to_sales_rate' => $product->transfer_to_sales_rate ?? 1,
+                        // Available quantities from product_available_quantities table
+                        'available_quantity_in_purchase_unit' => (float)($availableQty->total_purchase_units ?? 0),
+                        'available_quantity_in_transfer_unit' => (float)($availableQty->total_transfer_units ?? 0),
+                        'available_quantity_in_sales_unit' => (float)($availableQty->total_sales_units ?? 0),
+                    ];
+                });
+
+            return response()->json([
+                'goodsReceivedNote' => $goodsReceivedNote,
+                'goodsReceivedNoteProducts' => $goodsReceivedNoteProducts
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Failed to load GRN details',
+                'message' => $e->getMessage()
+            ], 404);
+        }
     }
 
     /**
@@ -374,6 +450,147 @@ class GoodReceiveNoteReturnController extends Controller
                                     ->where('id', $p['product_id'])
                                     ->update(['store_quantity_in_sale_unit' => round($looseBottlesOnly, 2)]);
                             }
+                        }
+                    }
+                }
+
+                // ========== DEDUCT FROM product_available_quantities TABLE ==========
+                // Use FIFO approach to deduct the returned quantity from product_available_quantities
+                // This keeps the batch-level inventory in sync with the aggregate product table
+                
+                $prod = Product::find($p['product_id']);
+                if ($prod) {
+                    $purchaseUnitId = (int)$prod->purchase_unit_id;
+                    $transferUnitId = (int)$prod->transfer_unit_id;
+                    $salesUnitId = (int)$prod->sales_unit_id;
+                    $purchaseToTransferRate = (float)$prod->purchase_to_transfer_rate ?: 1.0;
+                    $transferToSalesRate = (float)$prod->transfer_to_sales_rate ?: 1.0;
+                    
+                    // Step 1: Convert the returned quantity to bundles (transfer units)
+                    $quantityInBundles = 0;
+                    $quantityInSalesUnits = 0;
+                    
+                    if ($selectedUnitId == $purchaseUnitId) {
+                        // Returned in purchase units - convert to bundles
+                        $quantityInBundles = $clampedReturnQty * $purchaseToTransferRate;
+                        $quantityInSalesUnits = 0;
+                    } elseif ($selectedUnitId == $transferUnitId) {
+                        // Returned in transfer units - already in bundles
+                        $quantityInBundles = $clampedReturnQty;
+                        $quantityInSalesUnits = 0;
+                    } elseif ($selectedUnitId == $salesUnitId) {
+                        // Returned in sales units - convert to bundles and sales units
+                        $quantityInBundles = floor($clampedReturnQty / $transferToSalesRate);
+                        $quantityInSalesUnits = $clampedReturnQty % $transferToSalesRate;
+                    }
+                    
+                    // Step 2: Split bundles into boxes (purchase units) + remainder bundles
+                    $boxesToDeduct = floor($quantityInBundles / $purchaseToTransferRate);
+                    $bundlesToDeduct = $quantityInBundles % $purchaseToTransferRate;
+                    
+                    // Step 3: FIFO deduction from product_available_quantities table
+                    // Fetch batches ordered by created_at (oldest first)
+                    $batches = ProductAvailableQuantity::where('product_id', $p['product_id'])
+                        ->orderBy('created_at', 'asc')
+                        ->get();
+                    
+                    foreach ($batches as $batch) {
+                        if ($boxesToDeduct <= 0 && $bundlesToDeduct <= 0 && $quantityInSalesUnits <= 0) {
+                            break; // All quantities deducted
+                        }
+                        
+                        // Step 3a: Deduct boxes from available_quantity
+                        if ($boxesToDeduct > 0) {
+                            $deductedBoxes = min($boxesToDeduct, $batch->available_quantity ?? 0);
+                            $batch->available_quantity -= $deductedBoxes;
+                            $boxesToDeduct -= $deductedBoxes;
+                        }
+                        
+                        // Step 3b: Deduct bundles from quantity_in_transfer_unit
+                        // If not enough bundles, convert boxes to bundles
+                        if ($bundlesToDeduct > 0) {
+                            // First, try to deduct from existing bundles
+                            $deductedBundles = min($bundlesToDeduct, $batch->quantity_in_transfer_unit ?? 0);
+                            $batch->quantity_in_transfer_unit -= $deductedBundles;
+                            $bundlesToDeduct -= $deductedBundles;
+                            
+                            // If still need more bundles, convert boxes to bundles
+                            if ($bundlesToDeduct > 0 && ($batch->available_quantity ?? 0) > 0) {
+                                // How many boxes do we need to convert to get enough bundles?
+                                $boxesNeeded = ceil($bundlesToDeduct / $purchaseToTransferRate);
+                                $boxesAvailable = $batch->available_quantity ?? 0;
+                                
+                                if ($boxesAvailable >= $boxesNeeded) {
+                                    // Convert boxes to bundles
+                                    $convertedBundles = $boxesNeeded * $purchaseToTransferRate;
+                                    $deductedFromConverted = min($bundlesToDeduct, $convertedBundles);
+                                    
+                                    // Update: deduct boxes, add remaining bundles
+                                    $batch->available_quantity -= $boxesNeeded;
+                                    $batch->quantity_in_transfer_unit += ($convertedBundles - $deductedFromConverted);
+                                    $bundlesToDeduct -= $deductedFromConverted;
+                                }
+                            }
+                        }
+                        
+                        // Step 3c: Deduct sales units from quantity_in_sales_unit
+                        // If not enough sales units, convert bundles or boxes to sales units
+                        if ($quantityInSalesUnits > 0) {
+                            // First, try to deduct from existing sales units
+                            $deductedSalesUnits = min($quantityInSalesUnits, $batch->quantity_in_sales_unit ?? 0);
+                            $batch->quantity_in_sales_unit -= $deductedSalesUnits;
+                            $quantityInSalesUnits -= $deductedSalesUnits;
+                            
+                            // If still need more sales units, convert bundles to sales units
+                            if ($quantityInSalesUnits > 0 && ($batch->quantity_in_transfer_unit ?? 0) > 0) {
+                                // How many bundles do we need to convert to get enough sales units?
+                                $bundlesNeeded = ceil($quantityInSalesUnits / $transferToSalesRate);
+                                $bundlesAvailable = $batch->quantity_in_transfer_unit ?? 0;
+                                
+                                if ($bundlesAvailable >= $bundlesNeeded) {
+                                    // Convert bundles to sales units
+                                    $convertedSalesUnits = $bundlesNeeded * $transferToSalesRate;
+                                    $deductedFromConverted = min($quantityInSalesUnits, $convertedSalesUnits);
+                                    
+                                    // Update: deduct bundles, add remaining sales units
+                                    $batch->quantity_in_transfer_unit -= $bundlesNeeded;
+                                    $batch->quantity_in_sales_unit += ($convertedSalesUnits - $deductedFromConverted);
+                                    $quantityInSalesUnits -= $deductedFromConverted;
+                                }
+                            }
+                            
+                            // If still need more sales units, convert boxes to bundles then to sales units
+                            if ($quantityInSalesUnits > 0 && ($batch->available_quantity ?? 0) > 0) {
+                                // How many sales units can we get from available boxes?
+                                $salesUnitsPerBox = $purchaseToTransferRate * $transferToSalesRate;
+                                $boxesNeeded = ceil($quantityInSalesUnits / $salesUnitsPerBox);
+                                $boxesAvailable = $batch->available_quantity ?? 0;
+                                
+                                if ($boxesAvailable >= $boxesNeeded) {
+                                    // Convert boxes to bundles then to sales units
+                                    $convertedSalesUnits = $boxesNeeded * $salesUnitsPerBox;
+                                    $deductedFromConverted = min($quantityInSalesUnits, $convertedSalesUnits);
+                                    
+                                    // Update: deduct boxes, convert remainder to bundles and sales units
+                                    $batch->available_quantity -= $boxesNeeded;
+                                    $remainingSalesUnits = $convertedSalesUnits - $deductedFromConverted;
+                                    $remainingBundles = floor($remainingSalesUnits / $transferToSalesRate);
+                                    $remainingSalesOnly = $remainingSalesUnits % $transferToSalesRate;
+                                    
+                                    $batch->quantity_in_transfer_unit += $remainingBundles;
+                                    $batch->quantity_in_sales_unit += $remainingSalesOnly;
+                                    $quantityInSalesUnits -= $deductedFromConverted;
+                                }
+                            }
+                        }
+                        
+                        // Delete batch if all quantities are exhausted
+                        if (($batch->available_quantity ?? 0) <= 0 && 
+                            ($batch->quantity_in_transfer_unit ?? 0) <= 0 && 
+                            ($batch->quantity_in_sales_unit ?? 0) <= 0) {
+                            $batch->delete();
+                        } else {
+                            $batch->save();
                         }
                     }
                 }

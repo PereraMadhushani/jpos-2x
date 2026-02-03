@@ -16,17 +16,17 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
+         User::factory(10)->create();
         $this->call([
-        //  BrandSeeder::class,
-        //  CategorySeeder::class,
-        //   TypeSeeder::class,
+         BrandSeeder::class,
+         CategorySeeder::class,
+        TypeSeeder::class,
         MeasurementUnitSeeder::class,
-        //     SupplierSeeder::class,
-        // CustomerSeeder::class,
-        //   DiscountSeeder::class,
-        //   TaxSeeder::class,
-          //ProductSeeder::class,
+         SupplierSeeder::class,
+        CustomerSeeder::class,
+        DiscountSeeder::class,
+        TaxSeeder::class,
+        // ProductSeeder::class,
          CurrencySeeder::class,
             UserSeeder::class,
             CompanyInformationSeeder::class,

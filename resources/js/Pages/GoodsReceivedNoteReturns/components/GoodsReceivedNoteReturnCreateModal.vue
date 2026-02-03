@@ -22,7 +22,7 @@
           <div class="grid grid-cols-2 gap-3 mb-4">
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">GRN Number *</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">GRN Number <span class="text-red-600">*</span></label>
               <select v-model="form.grn_id" @change="onGrnSelect" class="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" required>
                 <option value="">Select GRN Number</option>
                 <option v-for="g in grns" :key="g.id" :value="g.id">{{ g.goods_received_note_no || g.grn_no || g.grnNo }}</option>
@@ -30,7 +30,7 @@
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Date *</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Date <span class="text-red-600">*</span></label>
             <input
                   type="date"
                   class="w-full px-3 py-2 text-sm text-gray-800 bg-gray-100 border border-gray-300 rounded-lg focus:outline-none cursor-not-allowed font-medium"
@@ -86,45 +86,47 @@
 
                   <td class="px-4 py-4">
                     <div class="space-y-1 flex flex-wrap gap-1">
-                      <!-- Show only the badge for the selected unit, using current store quantity -->
+                      <!-- If PURCHASE unit selected: Show Box + Bundle available -->
                       <template v-if="getProductPurchaseUnit(product) && !isTransferUnitSelected(product) && !isSalesUnitSelected(product)">
                         <div class="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">
                           <span class="text-[10px] font-semibold">{{ getProductPurchaseUnit(product).name }}:</span>
                           <span class="font-bold">{{ formatNumber(product.product?.store_quantity_in_purchase_unit ?? 0) }}</span>
                         </div>
+                        <div class="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">
+                          <span class="text-[10px] font-semibold">{{ getProductTransferUnit(product).name }}:</span>
+                          <span class="font-bold">{{ formatNumber(product.product?.store_quantity_in_transfer_unit ?? 0) }}</span>
+                        </div>
+                         <div class="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">
+                          <span class="text-[10px] font-semibold">{{ getProductSalesUnit(product).name }}:</span>
+                          <span class="font-bold">{{ formatNumber(product.product?.store_quantity_in_sale_unit ?? 0) }}</span>
+                        </div>
+
                       </template>
+                      
+                      <!-- If TRANSFER unit selected: Show converted Bundle + converted Bottle -->
                       <template v-else-if="getProductTransferUnit(product) && isTransferUnitSelected(product) && !isSalesUnitSelected(product)">
                         <div class="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">
                           <span class="text-[10px] font-semibold">{{ getProductTransferUnit(product).name }}:</span>
-                          <span class="font-bold">{{ formatNumber(product.product?.store_quantity_in_transfer_unit ?? product.product?.loose_bundles ?? 0) }}</span>
+                          <span class="font-bold">{{ formatNumber(getConvertedTransferQuantity(product)) }}</span>
+                        </div>
+                        <div class="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
+                          <span class="text-[10px] font-semibold">{{ getProductSalesUnit(product).name }}:</span>
+                          <span class="font-bold">{{ formatNumber(product.product?.store_quantity_in_sale_unit ?? 0) }}</span>
                         </div>
                       </template>
+                      
+                      <!-- If SALES unit selected: Show converted Bottle only -->
                       <template v-else-if="getProductSalesUnit(product) && isSalesUnitSelected(product)">
                         <div class="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
                           <span class="text-[10px] font-semibold">{{ getProductSalesUnit(product).name }}:</span>
-                          <span class="font-bold">
-                            {{
-                              (() => {
-                                const p = product.product || {};
-                                const sale = parseFloat(p.store_quantity_in_sale_unit ?? 0);
-                                if (sale) return formatNumber(sale);
-                                const purchase = parseFloat(p.store_quantity_in_purchase_unit ?? 0);
-                                const transfer = parseFloat(p.store_quantity_in_transfer_unit ?? p.loose_bundles ?? 0);
-                                const tRate = parseFloat(p.purchase_to_transfer_rate) || 1;
-                                const sRate = parseFloat(p.transfer_to_sales_rate) || 1;
-                                if (purchase && tRate && sRate) return formatNumber(purchase * tRate * sRate);
-                                if (transfer && sRate) return formatNumber(transfer * sRate);
-                                return '0.00';
-                              })()
-                            }}
-                          </span>
+                          <span class="font-bold">{{ formatNumber(getSalesUnitQuantity(product)) }}</span>
                         </div>
                       </template>
                     </div>
                   </td>
 
                   <td class="px-4 py-4">
-                    <div class="text-gray-900">{{ formatNumber(product.purchase_price) }}</div>
+                    <div class="text-gray-900">{{ formatNumber(getUnitPrice(product)) }}</div>
                   </td>
 
                   <td class="px-4 py-4">
@@ -303,68 +305,90 @@ const loadPOData = () => {
     });
 };
 
-const onGrnSelect = () => {
-  console.log('onGrnSelect called, grn_id=', form.value.grn_id)
-  console.log('props.grns length:', (props.grns || []).length)
+const onGrnSelect = async () => {
+  console.log('🔍 onGrnSelect called')
+  console.log('grn_id=', form.value.grn_id)
 
   if (!form.value.grn_id) {
+    console.warn('⚠️ No GRN ID selected')
     products.value = [];
     return;
   }
 
-  // Find selected GRN from props (we eager-loaded grnProducts in controller)
-  const selectedGrn = props.grns.find(g => Number(g.id) === Number(form.value.grn_id));
-
-  if (!selectedGrn) {
-    products.value = [];
-    return;
-  }
-
-  // relation may be available as `grnProducts` or `grn_products` depending on serialization
-  const grnProducts = selectedGrn.goods_received_note_products || selectedGrn.grnProducts || selectedGrn.grn_products || [];
-
-  if (!grnProducts.length) {
-    products.value = [];
-    return;
-  }
-
-
-  products.value = grnProducts.map(item => {
-    // Try to get nested product from item first, if not available look it up from availableProducts
-    let nestedProduct = item.product || {};
-    if ((!nestedProduct || Object.keys(nestedProduct).length === 0) && props.availableProducts && item.product_id) {
-      const lookedUpProduct = props.availableProducts.find(p => Number(p.id) === Number(item.product_id));
-      if (lookedUpProduct) {
-        nestedProduct = lookedUpProduct;
-      }
+  try {
+    const url = `/good-receive-note-returns/${form.value.grn_id}/details`;
+    console.log('📡 Making API request to:', url)
+    
+    // Call API endpoint to get GRN details with available quantities from product_available_quantities table
+    const response = await axios.get(url);
+    
+    console.log('✅ API Response from goodsReceivedNoteReturnDetails:', response.data)
+    
+    if (!response.data || !response.data.goodsReceivedNote) {
+      console.error('❌ Invalid response from API - missing goodsReceivedNote');
+      products.value = [];
+      return;
     }
-    const qty = parseFloat(item.quantity ?? item.qty ?? 1) || 1;
-    const purchasePrice = parseFloat(item.purchase_price ?? item.price ?? nestedProduct.price ?? 0) || 0;
-    const discount = parseFloat(item.discount ?? nestedProduct.discount ?? 0) || 0;
-    return {
-      product_id: item.product_id ?? nestedProduct.id ?? null,
-      product_name: nestedProduct.name ?? nestedProduct.product_name ?? null,
-      qty: qty,
-      purchase_price: purchasePrice,
-      discount: discount,
-      unit_id: item.unit_id ?? nestedProduct.purchase_unit_id ?? null,
-      unit_name: item.unit_name ?? nestedProduct.purchaseUnit?.name ?? nestedProduct.measurement_unit?.name ?? nestedProduct.measurementUnit?.name ?? '',
-      total: 0, // will be recalculated below
-      dbTotal: 0, // not used anymore
-      returnQty: 0,
-      product: nestedProduct,
-    };
-  });
-  // recalculate all totals after loading products
-  products.value.forEach((_, idx) => calculateTotal(idx));
 
-  if (selectedGrn.grn_date) {
-    form.value.grn_date = selectedGrn.grn_date;
-  }
+    const goodsReceivedNote = response.data.goodsReceivedNote;
+    const grnProducts = response.data.goodsReceivedNoteProducts || [];
 
-  // Store the GRN subtotal for display
-  if (selectedGrn.subtotal) {
-    form.value.grn_subtotal = parseFloat(selectedGrn.subtotal);
+    if (!grnProducts.length) {
+      products.value = [];
+      return;
+    }
+
+    // Map API response to product items
+    products.value = grnProducts.map(item => {
+      const purchasePrice = parseFloat(item.purchase_price) || 0;
+      const discount = parseFloat(item.discount) || 0;
+      
+      return {
+        product_id: item.product_id,
+        product_name: item.name || 'N/A',
+        qty: parseFloat(item.quantity) || 1,
+        purchase_price: purchasePrice,
+        discount: discount,
+        unit_id: item.purchase_unit?.id || null,
+        unit_name: item.purchase_unit?.name || '',
+        total: parseFloat(item.total) || 0,
+        returnQty: 0,
+        product: {
+          id: item.product_id,
+          name: item.name,
+          purchase_unit_id: item.purchase_unit?.id,
+          transfer_unit_id: item.transfer_unit?.id,
+          sales_unit_id: item.sales_unit?.id,
+          purchase_unit: item.purchase_unit,
+          transfer_unit: item.transfer_unit,
+          sales_unit: item.sales_unit,
+          purchase_to_transfer_rate: item.purchase_to_transfer_rate || 1,
+          transfer_to_sales_rate: item.transfer_to_sales_rate || 1,
+          // Store available quantities from product_available_quantities table
+          store_quantity_in_purchase_unit: item.available_quantity_in_purchase_unit || 0,
+          store_quantity_in_transfer_unit: item.available_quantity_in_transfer_unit || 0,
+          store_quantity_in_sale_unit: item.available_quantity_in_sales_unit || 0,
+        },
+      };
+
+    });   
+
+
+    // Update GRN date
+    if (goodsReceivedNote.grn_date) {
+      form.value.grn_date = goodsReceivedNote.grn_date;
+    }
+
+    // Recalculate totals
+    products.value.forEach((_, idx) => calculateTotal(idx));
+
+    console.log('Loaded GRN products from API:', products.value.length);
+    console.log('Products with available quantities:', products.value);
+
+  } catch (error) {
+    console.error('Failed to load GRN details:', error);
+    alert('Failed to load GRN details. Please try again.');
+    products.value = [];
   }
 };
 
@@ -390,10 +414,57 @@ const onProductSelect = (index) => {
 const calculateTotal = (index) => {
   const p = products.value[index]
   const nestedProduct = p.product || {}
-  const purchasePrice = parseFloat(p.purchase_price) || 0
-  // Always use store_quantity_in_purchase_unit for total
-  const qty = parseFloat(nestedProduct.store_quantity_in_purchase_unit ?? 0)
-  p.total = qty * purchasePrice
+  console.log('Calculating total for product index', nestedProduct)
+  const basePrice = parseFloat(p.purchase_price) || 0
+  const transferRate = parseFloat(nestedProduct.purchase_to_transfer_rate) || 1
+  const salesRate = parseFloat(nestedProduct.transfer_to_sales_rate) || 1
+  const selectedUnitId = p.unit_id ?? null
+  const returnQty = parseFloat(p.returnQty) || 0
+
+  // If no unit selected, return 0
+  if (!selectedUnitId) {
+    p.total = 0
+    return
+  }
+
+  let totalBeforeReturn = 0
+  let unitPrice = 0
+
+  // If PURCHASE unit selected: (purchase_qty × purchase_price) + (transfer_qty × transfer_price)
+  if (Number(selectedUnitId) === Number(nestedProduct.purchase_unit_id)) {
+    const purchaseQty = parseFloat(nestedProduct.store_quantity_in_purchase_unit) || 0
+    const transferQty = parseFloat(nestedProduct.store_quantity_in_transfer_unit) || 0
+    const transferPrice = basePrice / transferRate
+    totalBeforeReturn = (purchaseQty * basePrice) + (transferQty * transferPrice)
+    unitPrice = basePrice
+  }
+  // If TRANSFER unit selected: (transfer_qty × transfer_price) + (sales_qty × sales_price)
+  else if (Number(selectedUnitId) === Number(nestedProduct.transfer_unit.id)) {
+    const purchaseQty = parseFloat(nestedProduct.store_quantity_in_purchase_unit) || 0
+    const transferQty = parseFloat(nestedProduct.store_quantity_in_transfer_unit) || 0
+    const salesQty = parseFloat(nestedProduct.store_quantity_in_sale_unit) || 0
+    const transferQtyFromPurchase = purchaseQty * transferRate
+    const totalTransferQty = transferQtyFromPurchase + transferQty
+    const transferPrice = basePrice / transferRate
+    const salesPrice = basePrice / (transferRate * salesRate)
+    totalBeforeReturn = (totalTransferQty * transferPrice) + (salesQty * salesPrice)
+    unitPrice = transferPrice
+  }
+  // If SALES unit selected: sales_qty × sales_price
+  else if (Number(selectedUnitId) === Number(nestedProduct.sales_unit_id)) {
+    const purchaseQty = parseFloat(nestedProduct.store_quantity_in_purchase_unit) || 0
+    const transferQty = parseFloat(nestedProduct.store_quantity_in_transfer_unit) || 0
+    const transferQtyFromPurchase = purchaseQty * transferRate
+    const totalTransferQty = transferQtyFromPurchase + transferQty
+    const salesQty = parseFloat(nestedProduct.store_quantity_in_sale_unit) || 0
+    const totalSalesQty = totalTransferQty * salesRate + salesQty
+    const salesPrice = basePrice / (transferRate * salesRate)
+    totalBeforeReturn = totalSalesQty * salesPrice
+    unitPrice = salesPrice
+  }
+
+  // Deduct return quantity value from total
+  p.total = totalBeforeReturn - (returnQty * unitPrice)
 }
 
 const getProductPurchaseUnit = (product) => {
@@ -492,16 +563,25 @@ const getTransferUnitQuantity = (product) => {
 
 const getSalesUnitQuantity = (product) => {
   const nestedProduct = product.product || {}
-  return nestedProduct.store_quantity_in_sale_unit ?? 0
+  const purchaseQty = parseFloat(nestedProduct.store_quantity_in_purchase_unit) || 0
+  const transferQty = parseFloat(nestedProduct.store_quantity_in_transfer_unit) || 0
+  const transferRate = parseFloat(nestedProduct.purchase_to_transfer_rate) || 1
+  const salesRate = parseFloat(nestedProduct.transfer_to_sales_rate) || 1
+  const salesQty = parseFloat(nestedProduct.store_quantity_in_sale_unit) || 0
+
+  return (purchaseQty * transferRate * salesRate) + (transferQty * salesRate) + salesQty
 }
 
 const getConvertedTransferQuantity = (product) => {
   const nestedProduct = product.product || {}
   const purchaseQty = parseFloat(nestedProduct.store_quantity_in_purchase_unit) || 0
-  const transferQty = parseFloat(nestedProduct.loose_bundles) || 0
+  const transferQty = parseFloat(nestedProduct.store_quantity_in_transfer_unit) || 0
   const transferRate = parseFloat(nestedProduct.purchase_to_transfer_rate) || 1
+  const salesRate = parseFloat(nestedProduct.transfer_to_sales_rate) || 1
+  const salesQty = parseFloat(nestedProduct.store_quantity_in_sale_unit) || 0
   
   // Convert: (purchase_qty × rate) + transfer_qty
+  // Example: (5 boxes × 5) + 4 bundles = 25 + 4 = 29 bundles
   return (purchaseQty * transferRate) + transferQty
 }
 
@@ -596,6 +676,37 @@ const getAvailableUnitSymbol = (product) => {
   }
 
   return ''
+}
+
+const getUnitPrice = (product) => {
+  const nestedProduct = product.product || {}
+  const basePrice = parseFloat(product.purchase_price) || 0
+  const selectedUnitId = product.unit_id ?? null
+
+  // If no unit selected, return base price
+  if (!selectedUnitId) {
+    return basePrice
+  }
+
+  const transferRate = parseFloat(nestedProduct.purchase_to_transfer_rate) || 1
+  const salesRate = parseFloat(nestedProduct.transfer_to_sales_rate) || 1
+
+  // If PURCHASE unit selected: return price as is
+  if (Number(selectedUnitId) === Number(nestedProduct.purchase_unit_id)) {
+    return basePrice
+  }
+
+  // If TRANSFER unit selected: price / purchase_to_transfer_rate
+  if (Number(selectedUnitId) === Number(nestedProduct.transfer_unit_id)) {
+    return basePrice / transferRate
+  }
+
+  // If SALES unit selected: price / (purchase_to_transfer_rate * transfer_to_sales_rate)
+  if (Number(selectedUnitId) === Number(nestedProduct.sales_unit_id)) {
+    return basePrice / (transferRate * salesRate)
+  }
+
+  return basePrice
 }
 
 const formatNumber = (number) => {

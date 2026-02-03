@@ -167,6 +167,70 @@ class ProductTransferRequestsController extends Controller
                             $quantity
                         );
                         
+                        // Deduct from product_available_quantities table using FIFO (oldest first)
+                        $availableQuantities = \App\Models\ProductAvailableQuantity::where('product_id', $product->id)
+                            ->orderBy('created_at', 'asc')
+                            ->get();
+                        
+                        // Convert requested quantity to bundles and sales units based on selected unit
+                        $quantityInBundles = 0;
+                        $quantityInSalesUnits = 0;
+                        
+                        if ($unitId == $product->purchase_unit_id) {
+                            // Purchase unit selected: 5 boxes = 25 bundles (5 * 5)
+                            $quantityInBundles = $quantity * $purchaseToTransferRate;
+                            $quantityInSalesUnits = 0;
+                        } elseif ($unitId == $product->transfer_unit_id) {
+                            // Transfer unit selected: 7 bundles = 7 bundles + 0 sales units
+                            // 7 bundles = 1 box + 2 loose bundles
+                            $quantityInBundles = $quantity;
+                            $quantityInSalesUnits = 0;
+                        } elseif ($unitId == $product->sales_unit_id) {
+                            // Sales unit selected: 57 bottles = 5 bundles + 7 bottles
+                            // 57 / 10 = 5.7 = 5 bundles + 7 items
+                            $quantityInBundles = floor($quantity / $transferToSalesRate);
+                            $quantityInSalesUnits = $quantity % $transferToSalesRate;
+                        }
+                        
+                        // Split bundles into boxes + remainder bundles
+                        $boxesToDeduct = floor($quantityInBundles / $purchaseToTransferRate);
+                        $bundlesToDeduct = $quantityInBundles % $purchaseToTransferRate;
+                        
+                        // FIFO deduction from available quantities
+                        foreach ($availableQuantities as $availableQty) {
+                            if ($boxesToDeduct <= 0 && $bundlesToDeduct <= 0 && $quantityInSalesUnits <= 0) {
+                                break;
+                            }
+                            
+                            // Step 1: Deduct boxes (whole purchase units)
+                            if ($boxesToDeduct > 0) {
+                                $boxesFromBatch = min($boxesToDeduct, $availableQty->available_quantity);
+                                $availableQty->decrement('available_quantity', $boxesFromBatch);
+                                $boxesToDeduct -= $boxesFromBatch;
+                            }
+                            
+                            // Step 2: Deduct loose bundles (transfer units)
+                            if ($bundlesToDeduct > 0) {
+                                $bundlesFromBatch = min($bundlesToDeduct, $availableQty->quantity_in_transfer_unit);
+                                $availableQty->decrement('quantity_in_transfer_unit', $bundlesFromBatch);
+                                $bundlesToDeduct -= $bundlesFromBatch;
+                            }
+                            
+                            // Step 3: Deduct loose sales units
+                            if ($quantityInSalesUnits > 0) {
+                                $salesUnitsFromBatch = min($quantityInSalesUnits, $availableQty->quantity_in_sales_unit);
+                                $availableQty->decrement('quantity_in_sales_unit', $salesUnitsFromBatch);
+                                $quantityInSalesUnits -= $salesUnitsFromBatch;
+                            }
+                            
+                            // Delete batch if fully depleted
+                            if ($availableQty->available_quantity <= 0 && $availableQty->quantity_in_transfer_unit <= 0 && $availableQty->quantity_in_sales_unit <= 0) {
+                                $availableQty->delete();
+                            } else {
+                                $availableQty->save();
+                            }
+                        }
+                        
                         // Create PRN product record
                         // Get unit price based on the selected unit
                         $unitPrice = 0;

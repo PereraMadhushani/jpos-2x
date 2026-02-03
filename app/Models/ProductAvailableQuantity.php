@@ -17,10 +17,14 @@ class ProductAvailableQuantity extends Model
         'available_quantity',
         'unit_id',
         'goods_received_note_id',
+        'quantity_in_transfer_unit',
+        'quantity_in_sales_unit',
     ];
 
     protected $casts = [
         'available_quantity' => 'decimal:2',
+        'quantity_in_transfer_unit' => 'decimal:2',
+        'quantity_in_sales_unit' => 'decimal:2',
     ];
 
     // Relationships

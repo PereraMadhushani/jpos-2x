@@ -269,6 +269,7 @@ Route::middleware(['auth', 'role:0,1,2,3'])->group(function () {
     // Goods Received Note Return Routes
     Route::prefix('good-receive-note-returns')->name('good-receive-note-returns.')->group(function () {
         Route::get('/', [GoodReceiveNoteReturnController::class, 'index'])->name('index');
+        Route::get('/{id}/details', [GoodReceiveNoteReturnController::class, 'goodsReceivedNoteReturnDetails']);
         Route::get('/create', [GoodReceiveNoteReturnController::class, 'create'])->name('create');
         Route::post('/', [GoodReceiveNoteReturnController::class, 'store'])->name('store');
         Route::delete('/{goodReceiveNoteReturn}', [GoodReceiveNoteReturnController::class, 'destroy'])->name('destroy');

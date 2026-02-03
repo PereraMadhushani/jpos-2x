@@ -70,7 +70,6 @@ class GoodReceiveNoteController extends Controller
         
         // Load measurement units for display purposes
         $measurementUnits = MeasurementUnit::orderBy('name')->get();
-        
         return Inertia::render('GoodsReceivedNotes/Index', [
             'goodsReceivedNotes' => $goodsReceivedNotes,
             'measurementUnits' => $measurementUnits,
@@ -169,7 +168,7 @@ class GoodReceiveNoteController extends Controller
                 // Save received product line (store quantity in `quantity` column)
                 GoodsReceivedNoteProduct::create([
                     'goods_received_note_id' => $grn->id,
-                    'product_id'            => $product['product_id'],
+                    'product_id'           => $product['product_id'],
                     // Store received amount in `quantity` using issued_quantity from frontend
                     'quantity'              => (int) $product['issued_quantity'],
                     'purchase_price'        => $product['purchase_price'],
@@ -181,19 +180,25 @@ class GoodReceiveNoteController extends Controller
 
                 // Save batch number to ProductAvailableQuantity table if batch_number is provided
                 if (!empty($batchNumberForProduct)) {
+                    $issuedQty = (int) $product['issued_quantity'];
+                    
                     $existingRecord = ProductAvailableQuantity::where('product_id', $product['product_id'])
                         ->where('batch_number', $batchNumberForProduct)
                         ->first();
 
                     if ($existingRecord) {
-                        // Update existing batch record - add to available quantity
-                        $existingRecord->increment('available_quantity', (int) $product['issued_quantity']);
+                        // Update existing batch record - add to available quantity in purchase units only
+                        $existingRecord->increment('available_quantity', $issuedQty);
                     } else {
                         // Create new batch record with GRN ID
+                        // Only store available_quantity in purchase units
+                        // quantity_in_transfer_unit and quantity_in_sales_unit will be calculated when items transfer
                         ProductAvailableQuantity::create([
                             'product_id'              => $product['product_id'],
                             'batch_number'           => $batchNumberForProduct,
-                            'available_quantity'     => (int) $product['issued_quantity'],
+                            'available_quantity'     => $issuedQty,
+                            'quantity_in_transfer_unit' => 0,
+                            'quantity_in_sales_unit' => 0,
                             'unit_id'                => $product['measurement_unit_id'] ?? null,
                             'goods_received_note_id' => $grn->id,
                         ]);
@@ -421,4 +426,5 @@ class GoodReceiveNoteController extends Controller
         // Return formatted GRN number with zero-padded sequence
         return $prefix . '-' . $date . '-' . str_pad($sequence, 4, '0', STR_PAD_LEFT);
     }
+   
 }
