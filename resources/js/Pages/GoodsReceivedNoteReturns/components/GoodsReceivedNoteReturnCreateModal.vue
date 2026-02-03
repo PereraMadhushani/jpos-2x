@@ -22,7 +22,7 @@
           <div class="grid grid-cols-2 gap-3 mb-4">
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">GRN Number *</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">GRN Number <span class="text-red-500">*</span></label>
               <select v-model="form.grn_id" @change="onGrnSelect" class="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" required>
                 <option value="">Select GRN Number</option>
                 <option v-for="g in grns" :key="g.id" :value="g.id">{{ g.goods_received_note_no || g.grn_no || g.grnNo }}</option>
@@ -30,7 +30,7 @@
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Date *</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Date <span class="text-red-500">*</span></label>
             <input
                   type="date"
                   class="w-full px-3 py-2 text-sm text-gray-800 bg-gray-100 border border-gray-300 rounded-lg focus:outline-none cursor-not-allowed font-medium"
